@@ -1,0 +1,20 @@
+# 意図解釈のテストケース例
+# プロジェクトごとにカスタマイズしてください
+#
+# フォーマット:
+#   - id: ユニークID
+#     input: "Claudeに投げるプロンプト"
+#     tags: [タグ1, タグ2]
+#     expected:
+#       approach: "期待されるアプローチの説明"
+#       files_read_pattern:
+#         - "読まれるべきファイルのパターン"
+
+- id: int-example-001
+  input: "このリポジトリの構成を教えて"
+  tags: [exploration, basic]
+  expected:
+    approach: "ディレクトリ構造を探索し、主要ファイルを読む"
+    files_read_pattern:
+      - "README.md"
+      - "package.json"

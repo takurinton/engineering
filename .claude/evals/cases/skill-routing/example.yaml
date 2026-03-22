@@ -1,0 +1,23 @@
+# スキルルーティングのテストケース例
+# プロジェクトごとにカスタマイズしてください
+#
+# フォーマット:
+#   - id: ユニークID
+#     input: "Claudeに投げるプロンプト"
+#     tags: [タグ1, タグ2]
+#     expected:
+#       skill_called: "期待されるスキル名"
+#       args_contain: "引数に含まれるべき文字列"
+
+- id: sr-example-001
+  input: "PRのレビューをして #42"
+  tags: [code-review, basic]
+  expected:
+    skill_called: code-review
+    args_contain: "42"
+
+- id: sr-example-002
+  input: "この変更をPRにして"
+  tags: [create-pr, basic]
+  expected:
+    skill_called: create-pr
