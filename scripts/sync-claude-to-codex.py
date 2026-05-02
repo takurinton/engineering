@@ -368,6 +368,7 @@ def generate_rules(settings_local: dict, shared_rules_path: Path) -> str:
 
 
 def sync_claude_to_codex(repo_root: Path, dry_run: bool, delete: bool) -> int:
+    engineering_root = Path(__file__).resolve().parent.parent
     claude_dir = repo_root / ".claude"
     skills_src = claude_dir / "skills"
     skills_dst = repo_root / ".agents" / "skills"
@@ -378,6 +379,7 @@ def sync_claude_to_codex(repo_root: Path, dry_run: bool, delete: bool) -> int:
     hooks_json = codex_dir / "hooks.json"
     rules_file = codex_dir / "rules" / "default.rules"
     shared_codex_dir = load_shared_codex_dir()
+    is_engineering_repo = repo_root == engineering_root
 
     if not skills_src.exists():
         print(f"Source skills directory not found: {skills_src}", file=sys.stderr)
@@ -400,6 +402,10 @@ def sync_claude_to_codex(repo_root: Path, dry_run: bool, delete: bool) -> int:
 
     sync_directory(skills_src, skills_dst, dry_run, delete)
     write_text(agents_md, generate_agents_md(claude_md), dry_run)
+    if is_engineering_repo:
+        print(f"OK   {codex_dir} (shared source)")
+        return 0
+
     write_text(
         config_toml,
         generate_config_toml(settings, shared_codex_dir / "config.toml"),
