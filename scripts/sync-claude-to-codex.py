@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shlex
 import shutil
 import sys
+import tomllib
 from pathlib import Path
 
 
@@ -88,12 +90,66 @@ def shell_quote(value: str) -> str:
 
 def normalize_hook_command(command: str) -> str:
     if command.startswith(".claude/hooks/"):
-        return f'/bin/bash "{command}"'
+        return f'/bin/bash "$(git rev-parse --show-toplevel)/{command}"'
     return command
 
 
-def generate_hooks_json(settings: dict) -> str:
-    hooks = settings.get("hooks", {})
+def normalize_hook(hook: dict) -> dict:
+    converted_hook = dict(hook)
+    if hook.get("type") == "command" and "command" in hook:
+        converted_hook["command"] = normalize_hook_command(hook["command"])
+    return converted_hook
+
+
+def load_shared_codex_dir() -> Path:
+    return Path(__file__).resolve().parent.parent / ".codex"
+
+
+def load_toml(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    with path.open("rb") as f:
+        return tomllib.load(f)
+
+
+def merge_hooks(shared_hooks: dict, repo_hooks: dict) -> dict:
+    hooks = dict(shared_hooks.get("hooks", {}))
+
+    for event_name, groups in repo_hooks.items():
+        event_groups = list(hooks.get(event_name, []))
+        for group in groups:
+            normalized_group = {
+                **({"matcher": group["matcher"]} if "matcher" in group else {}),
+                "hooks": [normalize_hook(hook) for hook in group.get("hooks", [])],
+            }
+            matcher = group.get("matcher")
+            target = None
+            for existing in event_groups:
+                if existing.get("matcher") == matcher:
+                    target = existing
+                    break
+
+            if target is None:
+                event_groups.append(normalized_group)
+                continue
+
+            seen = {
+                json.dumps(hook, ensure_ascii=False, sort_keys=True)
+                for hook in target.get("hooks", [])
+            }
+            for hook in normalized_group.get("hooks", []):
+                key = json.dumps(hook, ensure_ascii=False, sort_keys=True)
+                if key in seen:
+                    continue
+                target.setdefault("hooks", []).append(hook)
+                seen.add(key)
+
+        hooks[event_name] = event_groups
+
+    return hooks
+
+
+def normalize_hooks(hooks: dict) -> dict:
     output: dict[str, dict] = {"hooks": {}}
 
     for event_name, groups in hooks.items():
@@ -103,20 +159,31 @@ def generate_hooks_json(settings: dict) -> str:
             if "matcher" in group:
                 converted_group["matcher"] = group["matcher"]
             for hook in group.get("hooks", []):
-                converted_hook = dict(hook)
-                if hook.get("type") == "command" and "command" in hook:
-                    converted_hook["command"] = normalize_hook_command(hook["command"])
-                converted_group["hooks"].append(converted_hook)
+                converted_group["hooks"].append(normalize_hook(hook))
             converted_groups.append(converted_group)
         output["hooks"][event_name] = converted_groups
 
     return json.dumps(output, ensure_ascii=False, indent=2) + "\n"
 
 
-def generate_config_toml(settings: dict) -> str:
+def generate_hooks_json(settings: dict, shared_hooks_path: Path) -> str:
+    shared_hooks = load_json(shared_hooks_path) if shared_hooks_path.exists() else {}
+    hooks = merge_hooks(shared_hooks, settings.get("hooks", {}))
+    return normalize_hooks(hooks)
+
+
+def generate_config_toml(settings: dict, shared_config_path: Path) -> str:
     lines = [GENERATED_BANNER.rstrip(), ""]
 
-    codex_settings = settings.get("codex", {})
+    shared_config = load_toml(shared_config_path)
+    codex_settings = {
+        "suppressUnstableFeaturesWarning": shared_config.get(
+            "suppress_unstable_features_warning"
+        ),
+        "askForApproval": shared_config.get("ask_for_approval"),
+        "sandbox": shared_config.get("sandbox"),
+    }
+    codex_settings.update(settings.get("codex", {}))
     if codex_settings.get("suppressUnstableFeaturesWarning") is not None:
         value = "true" if codex_settings["suppressUnstableFeaturesWarning"] else "false"
         lines.append(f"suppress_unstable_features_warning = {value}")
@@ -130,11 +197,15 @@ def generate_config_toml(settings: dict) -> str:
     if len(lines) > 2:
         lines.append("")
 
-    if settings.get("hooks"):
+    features = shared_config.get("features", {})
+    codex_hooks = features.get("codex_hooks")
+    if codex_hooks is None and settings.get("hooks"):
+        codex_hooks = True
+    if codex_hooks is not None:
         lines.extend(
             [
                 "[features]",
-                "codex_hooks = true",
+                f"codex_hooks = {'true' if codex_hooks else 'false'}",
                 "",
             ]
         )
@@ -195,11 +266,26 @@ def tokenize_rule_prefix(command: str) -> list[str] | None:
     return tokens
 
 
-def generate_rules(settings_local: dict) -> str:
+def extract_rule_prefixes(rules_content: str) -> set[tuple[str, ...]]:
+    prefixes: set[tuple[str, ...]] = set()
+    pattern = re.compile(r"pattern\s*=\s*\[(.*?)\]", re.DOTALL)
+    for match in pattern.finditer(rules_content):
+        raw = match.group(1)
+        tokens = re.findall(r'"((?:[^"\\]|\\.)*)"', raw)
+        if tokens:
+            prefixes.add(tuple(json.loads(f'"{token}"') for token in tokens))
+    return prefixes
+
+
+def generate_rules(settings_local: dict, shared_rules_path: Path) -> str:
     permissions = settings_local.get("permissions", {})
     allow_entries = permissions.get("allow", [])
+    shared_rules = (
+        shared_rules_path.read_text().rstrip() if shared_rules_path.exists() else ""
+    )
+    shared_prefixes = extract_rule_prefixes(shared_rules)
 
-    seen: set[tuple[str, ...]] = set()
+    seen: set[tuple[str, ...]] = set(shared_prefixes)
     rules: list[list[str]] = []
     skipped: list[str] = []
 
@@ -224,6 +310,13 @@ def generate_rules(settings_local: dict) -> str:
         rules.append(pattern)
 
     lines = [GENERATED_BANNER.rstrip(), ""]
+    if shared_rules:
+        lines.append("# Shared rules from engineering/.codex/rules/default.rules.")
+        lines.append(shared_rules)
+        lines.append("")
+        lines.append("# Repo-local rules generated from .claude/settings.local.json.")
+        lines.append("")
+
     lines.append("# Best-effort migration from .claude/settings.local.json permissions.allow.")
     lines.append("# Only Bash(...) entries that can be represented as Codex prefix rules are included.")
     lines.append("# Imported entries default to prompt because Codex rules govern out-of-sandbox execution.")
@@ -284,6 +377,7 @@ def sync_claude_to_codex(repo_root: Path, dry_run: bool, delete: bool) -> int:
     config_toml = codex_dir / "config.toml"
     hooks_json = codex_dir / "hooks.json"
     rules_file = codex_dir / "rules" / "default.rules"
+    shared_codex_dir = load_shared_codex_dir()
 
     if not skills_src.exists():
         print(f"Source skills directory not found: {skills_src}", file=sys.stderr)
@@ -306,10 +400,18 @@ def sync_claude_to_codex(repo_root: Path, dry_run: bool, delete: bool) -> int:
 
     sync_directory(skills_src, skills_dst, dry_run, delete)
     write_text(agents_md, generate_agents_md(claude_md), dry_run)
-    write_text(config_toml, generate_config_toml(settings), dry_run)
-    write_text(hooks_json, generate_hooks_json(settings), dry_run)
+    write_text(
+        config_toml,
+        generate_config_toml(settings, shared_codex_dir / "config.toml"),
+        dry_run,
+    )
+    write_text(hooks_json, generate_hooks_json(settings, shared_codex_dir / "hooks.json"), dry_run)
     if settings_local:
-        write_text(rules_file, generate_rules(settings_local), dry_run)
+        write_text(
+            rules_file,
+            generate_rules(settings_local, shared_codex_dir / "rules" / "default.rules"),
+            dry_run,
+        )
 
     return 0
 

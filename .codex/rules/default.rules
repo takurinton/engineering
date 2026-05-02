@@ -1,0 +1,74 @@
+# Shared Codex command rules used by engineering/scripts/sync-claude-to-codex.py.
+# Repo-local rules are generated from .claude/settings.local.json and appended.
+
+prefix_rule(
+    pattern = ["git"],
+    decision = "allow",
+    justification = "Shared engineering default",
+)
+
+prefix_rule(
+    pattern = ["gh"],
+    decision = "allow",
+    justification = "Shared engineering default",
+)
+
+prefix_rule(
+    pattern = ["find"],
+    decision = "allow",
+    justification = "Shared engineering default",
+)
+
+prefix_rule(
+    pattern = ["grep"],
+    decision = "allow",
+    justification = "Shared engineering default",
+)
+
+prefix_rule(
+    pattern = ["rg"],
+    decision = "allow",
+    justification = "Shared engineering default",
+)
+
+prefix_rule(
+    pattern = ["sed"],
+    decision = "allow",
+    justification = "Shared engineering default",
+)
+
+prefix_rule(
+    pattern = ["ls"],
+    decision = "allow",
+    justification = "Shared engineering default",
+)
+
+prefix_rule(
+    pattern = ["cat"],
+    decision = "allow",
+    justification = "Shared engineering default",
+)
+
+prefix_rule(
+    pattern = ["head"],
+    decision = "allow",
+    justification = "Shared engineering default",
+)
+
+prefix_rule(
+    pattern = ["tail"],
+    decision = "allow",
+    justification = "Shared engineering default",
+)
+
+prefix_rule(
+    pattern = ["wc"],
+    decision = "allow",
+    justification = "Shared engineering default",
+)
+
+prefix_rule(
+    pattern = ["pwd"],
+    decision = "allow",
+    justification = "Shared engineering default",
+)
